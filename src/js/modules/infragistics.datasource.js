@@ -22,17 +22,19 @@
  * Depends on:
  *	jquery-1.9.1.js
  *	infragistics.util.js
+ *  infragistics.util.jquery.js
  *
  */
 
-/*global define, jQuery, Class, window, ActiveXObject, DOMParser, XPathResult, XMLSerializer */
+/*global Class, ActiveXObject, DOMParser, XPathResult, XMLSerializer */
 (function (factory) {
 	if (typeof define === "function" && define.amd) {
 
 		// AMD. Register as an anonymous module.
-		define( /*"igniteui/js/modules/infragistics.datasource",*/ [
+		define( [
 			"jquery",
-			"./infragistics.util"
+			"./infragistics.util",
+			"./infragistics.util.jquery"
 		], factory );
 	} else {
 
@@ -3437,9 +3439,9 @@
 			}
 		},
 		_addRow: function (row, index, origDs) {
-			var data, key, count = 0, schema = this.settings.schema,
+			var data, key, i, count = 0, schema = this.settings.schema,
 				layouts = schema ? schema.layouts : null, lo, pdata,
-				all = [ this._data ], newRow;
+				all = [ this._data ], newRow, collectionProcessedData = [];
 			this._addOnlyUniqueToCollection(all, this._dataView);
 			this._addOnlyUniqueToCollection(all, origDs);
 			/* M.H. 15 Dec 2014 Fix for bug #186504: Added row is not displayed whether
@@ -3478,7 +3480,20 @@
 					// e.g. in TreeHierarchicalDataSource when argument at(of function _addRow) is set then function returns child data for record with key equals to 'at'
 					pdata = this._preprocessAddRow.apply(this,
 						Array.prototype.slice.call(arguments).concat([ data ]));
-					data = pdata.layoutData;// if data should not be processed by the code return null/undefined for layoutData
+					data = (pdata || {}).layoutData;// if data should not be processed by the code return null/undefined for layoutData
+					/* M.H. 15 Nov 2016 Fix for bug 228594: After updating a record in the igTreeGrid paging no longer works as expected. */
+					/* duplicate record is added when child row is added*/
+					if (data) {
+						for (i = 0; i < collectionProcessedData.length; i++) {
+							if (collectionProcessedData[ i ] === data) {
+								data = null;//skip adding a record in data collection
+								break;
+							}
+						}
+						if (data) {
+							collectionProcessedData.push(data);
+						}
+					}
 				}
 				if (data) {
 					// M.H. 17 June 2014 Fix for bug #171306: The ig_pk property is missing from the added row object.
@@ -3795,7 +3810,7 @@
 		/* callback is the function to call when databinding is async (remote)
 		callee is the object on which to call the callback function */
 		dataBind: function (callback, callee) {
-			/* data binds to the current data source  data source
+			/* data binds to the current data source
 			databinding works using the following workflow:
 			1. fire the databinding event
 			2. based on the data source type (see analyzeDataSource()), do the following:
@@ -5073,6 +5088,10 @@
 				csLength = cs.length;
 
 			if (s.type === "remote") {
+				/* M.H. 1 Nov 2016 Fix for bug 227681: When autoGenerateColumns is true and summaries are remote initially the summaries are not populated. */
+				if (!csLength && s.calculateAll) {
+					params.summariesParams[ s.summaryExprUrlKey + "(all)" ] = "*";
+				}
 				for (i = 0; i < csLength; i++) {
 					methodsStr = "";
 					/* check if methods are defined */
@@ -6674,6 +6693,19 @@
 		},
 		groupByDataView: function () {
 			/* returns the current normalized/transformed and paged/filtered/sorted group-by data
+			```
+				ds = new $.%%WidgetName%%({
+					dataSource: products,
+					primaryKey: "ProductID",
+					groupby: {
+						defaultCollapseState: true
+					}
+				});
+
+				ds.dataBind();
+
+				var groupByDataView = ds.groupByDataView();
+			```
 			returnType="array" array of data and non-data(grouped) records
 			*/
 			return this._gbDataView;
@@ -6732,7 +6764,8 @@
 			paramType="bool" if true the record should be collapsed, otherwise expanded
 			*/
 			var ds = this._gbData, i, len = ds.length, res = [], lvl,
-				row, hidden, gbrow, p = this.settings.paging;
+				row, hidden, gbrow, p = this.settings.paging,
+				sgb = this.settings.groupby || {};
 			this._gbCollapsed = this._gbCollapsed || {};
 			this._gbCollapsed[ id ] = !!collapsed;
 			for (i = 0; i < len; i++) {
@@ -6761,6 +6794,9 @@
 			this._gbDataView = this._vgbData;
 			if (p.enabled && p.type === "local") {
 				this._page();
+			}
+			if (sgb.recordToggledCallback) {
+				$.ig.util.invokeCallback(sgb.recordToggledCallback, [ id, collapsed ]);
 			}
 		},
 		isGroupByRecordCollapsed: function (gbRec) {
@@ -6845,7 +6881,7 @@
 									gbExprs,
 									collapsedRows) {
 			// data should be sorted(by gbExprs) when this functions is called - otherwise grouping will not be correct
-			var i, newgb = [];
+			var i, newgb = [], gbs = this.settings.groupby || {};
 			data = data || this._data;
 			gbExprs = gbExprs || [];
 			this._gbData = [];
@@ -6866,6 +6902,9 @@
 			}
 			this._processGroupsRecursive(data, gbExprs, 0, false, "");
 			this._gbDataView = this._vgbData;
+			if (gbs.dataGeneratedCallback) {
+				$.ig.util.invokeCallback(gbs.dataGeneratedCallback);
+			}
 			return this.groupByData();
 		},
 		_clearGroupByData: function () {
@@ -7796,6 +7835,38 @@
 			return this;
 		},
 		saveChanges: function (success, error) {
+			/* Posts to the restSettings urls using $.ajax, by serializing the changes as url params.
+				```
+					var ds = new $.ig.RESTDataSource({
+					dataSource: products,
+					primaryKey: "ProductID",
+						restSettings: {
+							create: {
+								url: "/api/customers/",
+								batch: true
+							},
+							update: {
+								url: "/api/customers/",
+								batch: true
+							},
+							remove: {
+								url: "/api/customers/",
+								batch: true
+							}
+						}
+					});
+
+					ds.dataBind();
+					// POST
+					ds.addRow(3, {"ProductID": 3, "Name": "BB Ball Bearing", "ProductNumber": "BE-2349"}, true);
+					// DELETE
+					ds.deleteRow(1, true);
+					// PUT
+					ds.updateRow(2, {"Name": "Ball Bearing", "ProductNumber": "BE-8329"}, true);
+					ds.saveChanges();
+				```
+			*/
+
 			// use $.ajax with the HTTP verb for every type of CRUD operation on the specified URL
 			// for each entry in the transaction log create a new request
 			// if batching is enabled create seperate arrays and send together
@@ -8359,6 +8430,9 @@
 		},
 		setCellValue: function (rowId, colId, val, autoCommit) {
 			/*  sets a cell value for the cell denoted by rowId and colId. Creates a transaction for the update operation and returns it
+			```
+				dsMashup.setCellValue(1, "Name", "CD Player", true);
+			```
 			paramType="object" the rowId - row key (string) or index (number)
 			paramType="object" the column id - column key (string) or index (number)
 			paramType="object" The new value
@@ -8412,6 +8486,13 @@
 		},
 		updateRow: function (rowId, rowObject, autoCommit) {
 			/* updates a record in the datasource. Creates a transaction that can be committed / rolled back
+			```
+			dsMashup.updateRow(1, {
+					Name: "DVD Player1",
+					Price: "10",
+					Rating: "5"
+				}, true);
+			```
 			paramType="object" the record key - primaryKey (string) or index (number)
 			paramType="object" the record object containing the key/value pairs we want to update. It doesn't have to include key/value pairs for all fields defined in the schema or in the data source (if no schema is defined)
 			paramType="bool" if autoCommit is true, the datasource will be updated automatically and the transaction is still stored in the accumulated transaction log
@@ -8466,6 +8547,28 @@
 		},
 		addRow: function (rowId, rowObject, autoCommit) {
 			/* adds a new row to the data source. Creates a transaction that can be committed / rolled back
+			```
+				var dsMashup;
+
+				var render = function (success, error) {
+					if (success) {
+					dsMashup.addRow(123, {Name : "CD Player", Description: "", Rating : 4, Price : 40}, true);
+						var template = "<tr><td>${ID}</td><td>${Name}</td><td>${Description}</td><td>${Rating}</td><td>${Price}</td></tr>",
+					    resultHtml = $.ig.tmpl(template, dsMashup.dataView());
+						$("#mashupDataSource").html(resultHtml);
+					} else {
+						alert(error);
+					}
+				}
+
+				$(window).load(function () {
+					dsMashup = new $.%%WidgetName%%({
+						callback: render,
+						dataSource: mashupSources
+					});
+					dsMashup.dataBind();
+				});
+			```
 			paramType="object" the record key - primaryKey (string) or index (number)
 			paramType="object" the new record data.
 			paramType="bool" if autoCommit is true, the datasource will be updated automatically and the transaction is still stored in the accumulated transaction log
@@ -8518,6 +8621,33 @@
 		/* jshint unused:false */
 		insertRow: function (rowId, rowObject, rowIndex, autoCommit, parentRowId) {
 			/* adds a new row to the data source. Creates a transaction that can be committed / rolled back
+			```
+				var dsMashup;
+
+				var render = function (success, error) {
+					if (success) {
+						dsMashup.insertRow(123, {
+							Name: "CD Player",
+							Price: "40",
+							Rating: "4"
+						}, 1, true);
+						var template = "<tr><td>${Name}</td><td>${Price}</td><td>${Rating}</td></tr>",
+						resultHtml = $.ig.tmpl(template, dsMashup.dataView());
+						$("#table").html(resultHtml);
+					} else {
+						alert(error);
+					}
+				}
+
+				$(window).load(function () {
+					dsMashup = new $.%%WidgetName%%({
+						callback: render,
+						dataSource: mashupSources
+					});
+				dsMashup.dataBind();
+
+				});
+			```
 			paramType="object" the record key - primaryKey (string) or index (number)
 			paramType="object" the new record data.
 			paramType="number" row index at which to insert the new row
@@ -8568,6 +8698,17 @@
 			return t;
 		},
 		dataBind: function () {
+		/* Data binds to the current data source.
+			```
+				var mashupSources = [
+					{ dataSource: jsArray, primaryKey: "ID" },
+					{ dataSource: xmlDoc, type: "xml", primaryKey: "ID" ,schema: xmlSchema }
+				];
+				var dsMashup = new $.ig.MashupDataSource({ dataSource: mashupSources });
+				dsMashup.dataBind();
+			```
+		*/
+
 			var i, ds = this.settings.dataSource;
 			if (this._dataBindingComplete || this._sources.length > 0) {
 				// we can proceed to data binding the mashup
@@ -8884,11 +9025,29 @@
 				propertyExpanded: "__ig_options.expanded",
 				/* type="string" The name of the property that keeps track of the level in the hierarchy.Defaults to __ig_options.dataLevel.*/
 				propertyDataLevel: "__ig_options.dataLevel",
-				/* type="bool" if set to TRUE it is expected that the source of data is normalized and transformed(has set dataLevel and expansion state). The source of data is used as flatDataView. Usually used when the paging is remote and paging mode is allLevels, or features are remote(and the processing of the returned result should be made on the server)*/
+				/* type="bool" if set to TRUE it is expected that the source of data is normalized and transformed(has set dataLevel and expansion state). The source of data is used as flatDataView. Usually used when the paging is remote and paging mode is allLevels, or features are remote(and the processing of the returned result should be made on the server)
+				```
+				var ds = new $.%%WidgetName%%({
+								dataSource: products,
+								treeDS: {
+									initialFlatDataView: true
+								}
+							});
+				```
+				*/
 				initialFlatDataView: false,
 				/*type="function" Specifies a custom function to be called when requesting data to the server - usually when expanding/collapsing record. If set the function should return the encoded URL. It takes as parameters: data record(type: object), expand - (type: bool). */
 				customEncodeUrlFunc: null,
-				/*type="bool" If true save expansion states in internal list and send it to the server. Applying to one of the main constraint of the REST architecture  Stateless Interactions - client specific data(like expansion states) should NOT be stored on the server */
+				/*type="bool" If true save expansion states in internal list and send it to the server. Applying to one of the main constraint of the REST architecture  Stateless Interactions - client specific data(like expansion states) should NOT be stored on the server
+				```
+				var ds = new $.%%WidgetName%%({
+								dataSource: products,
+								treeDS: {
+									persistExpansionStates: true
+								}
+							});
+				```
+				*/
 				persistExpansionStates: false,
 				/* Configure datasource filtering settings. */
 				filtering: {
@@ -8918,6 +9077,22 @@
 					none type="string" Does not render the contextual row
 					parent type="string" Renders a read-only representation of the immediate parent row
 					breadcrumb type="string" Renders a read-only breadcrumb trail representing the full path through all ancestors
+					```
+					var ds = new $.%%WidgetName%%({
+								dataSource: products,
+								paging: {
+									enabled : true,
+									pageSize:10,
+									type: "local",
+									contextRowMode: "breadcrumb"
+								},
+								treeDS: {
+									paging: {
+									  mode: "allLevels"
+									}
+								}
+							});
+					```
 					*/
 					contextRowMode: "none"
 				}
@@ -8992,7 +9167,7 @@
 			}
 		},
 		dataBind: function (callback, callee) {
-			/* data binds to the current data source  data source
+			/* data binds to the current data source
 			databinding works using the following workflow:
 			1. fire the databinding event
 			2. based on the data source type (see analyzeDataSource()), do the following:
@@ -9259,6 +9434,17 @@
 		/* //functions for transforming flat DS to hierarchical DS */
 		processDataPerLevel: function (data, level, suppressTransformation) {
 			/* This processes the passed data for the specified level and applies the schema transformation to it.
+			```
+					var ds = new $.%%WidgetName%%({
+						dataSource: products,
+						primaryKey: "ID",
+						treeDS: {
+							childDataKey: "Products"
+						}
+					});
+					ds.dataBind();
+					ds.processDataPerLevel(ds.getFlatData()[1], 1, false);
+			```
 			paramType="object" optional="false" The data to be processed and transformed
 			paramType="number" optional="true" The level to which the data belongs to. If this is not set it defaults to 0.
 			paramType="bool" optional="true" Determines whether the data should go through schema transformation. If true schema transofrmatin will not be applied.
@@ -9461,11 +9647,16 @@
 		generateFlatDataView: function () {
 			/*Generates a flat data view from the current (hierarchical)data
 			*/
+			var data, resObj;
 			if (this.settings.treeDS.initialFlatDataView) {
 				this._flatDataView = this._data;
 				return;
 			}
-			var resObj = this.generateFlatData(this.dataView());
+			data = this.dataView();
+			if (!this.shouldCallGenerateFlatDataView() && !data.length) {
+				data = !this._filter ? this.data() : this._filteredData;
+			}
+			resObj = this.generateFlatData(data);
 			this._flatDataView = resObj.flatVisibleData;
 		},
 		flatDataView: function () {
@@ -9478,19 +9669,27 @@
 			return this._flatDataView;
 		},
 		_generateFlatDataAndCountProperties: function () {
-			var resObj;
-			if (!this._filter) {
-				resObj = this.generateFlatData(this.data());
-			} else {
-				resObj = this.generateFlatData(this._filteredData);
-			}
+			var data = !this._filter ? this.data() : this._filteredData,
+				resObj = this.generateFlatData(data);
 			this._flatData = resObj.flatData;
 			this._totalRecordsCount = resObj.recordsCount;
-			this._recCount = resObj.visibleRecordsCount;
+			/*this._recCount = resObj.visibleRecordsCount;*/
 			this._flatVisibleData = resObj.flatVisibleData;
 		},
 		getVisibleFlatData: function () {
 			/* Returns flat visible data.
+			```
+					var ds = new $.%%WidgetName%%({
+						dataSource: products,
+						primaryKey: "ID",
+						treeDS: {
+							childDataKey: "Products"
+						}
+					});
+
+					ds.dataBind();
+					var visibleFlatData = ds.getVisibleFlatData();
+			```
 			returnType="object" the current visible flat data.
 			*/
 			if (!this._flatVisibleData) {
@@ -9500,6 +9699,18 @@
 		},
 		getFlatData: function () {
 			/* Returns flat data(without taking into account visible/expansion state).
+			```
+					var ds = new $.%%WidgetName%%({
+						dataSource: products,
+						primaryKey: "ID",
+						treeDS: {
+							childDataKey: "Products"
+						}
+						});
+
+					ds.dataBind();
+					var flatData = ds.getFlatData();
+			```
 			returnType="object" the current flat data.
 			*/
 			/* in case of flatData is not generated OR remote load on demand and data is changed */
@@ -9510,6 +9721,17 @@
 		},
 		getFlatDataCount: function () {
 			/*Returns total records count(without taking into account visible/expansion state).
+			```
+					var ds = new $.%%WidgetName%%({
+						dataSource: products,
+						primaryKey: "ID",
+						treeDS: {
+							childDataKey: "Products"
+						}
+					});
+					ds.dataBind();
+					var flatDataCount = ds.getFlatDataCount();
+			```
 			returnType="number" count of all data records(in flat representation)
 			*/
 			return this._totalRecordsCount;
@@ -10106,6 +10328,31 @@
 			}
 			return this._super();
 		},
+		/*override pageCount */
+		pageCount: function () {
+			/* returns the total number of pages
+			```
+				ds = new $.%%WidgetName%%({
+					type: "json",
+					dataSource: adventureWorks,
+					paging: {
+						enabled : true,
+						pageSize:10,
+						type: "local"
+					}
+				});
+
+				var count = ds.pageCount();
+			```
+			returnType="number" total number fo pages
+			*/
+			var p = this.settings.paging;
+			if (p.enabled && p.type === "local" &&
+				this.settings.treeDS.paging.mode === "allLevels") {
+				return Math.ceil(this.totalLocalRecordsCount() / p.pageSize) || 1;
+			}
+			return this._super.apply(this, arguments);
+		},
 		/* M.H. 19 June 2015 Fix for bug 201486: When remote filtering with
 		DisplayMode=ShowWithAncestorsAndDescendants is used the matching
 		records label shows incorrect results */
@@ -10113,6 +10360,18 @@
 			/* returns the total number of match filtering records in the data source.
 			When the dataSource is remote and filtering is applied then it is taken value
 			of property "filtering.countRecords" in metatadata - if set. If it is not set returns totalRecordsCount
+			```
+					var ds = new $.%%WidgetName%%({
+						dataSource: products,
+						primaryKey: "ID",
+						treeDS: {
+							childDataKey: "Products"
+						}
+					});
+					ds.dataBind();
+					ds.filter([{fieldName : "Name", expr: "M", cond: "startsWith"}], "AND", true);
+					var matchRecordsCount = ds.getFilteringMatchRecordsCount();
+			```
 			returnType="number" the number of match filtering records(if filtering is not applied returns totalRecordsCount)
 			*/
 			var count = this.metadata("filtering.countRecords");
@@ -10391,6 +10650,18 @@
 		},
 		getFilteredRecordsCountFromDataView: function () {
 			/*Gets the count of the filtered records in the dataView
+			```
+					var ds = new $.%%WidgetName%%({
+						dataSource: products,
+						primaryKey: "ID",
+						treeDS: {
+							childDataKey: "Products"
+						}
+					});
+					ds.dataBind();
+					ds.filter([{fieldName : "Name", expr: "M", cond: "startsWith"}], "AND", true);
+					var filteredRecordsCount = ds.getFilteredRecordsCountFromDataView();
+			```
 			returnType="number" count of filtered records in the dataview
 			*/
 			var fdv = this.flatDataView(), i, count = 0,
@@ -10665,6 +10936,39 @@
 		},
 		insertRow: function (rowId, rowObject, rowIndex, autoCommit, parentRowId) {
 			/* adds a new row to the data source. Creates a transaction that can be committed / rolled back
+			```
+				var ds;
+
+				var render = function (success, error) {
+					if (success) {
+						ds.insertRow(123, {
+							Name: "CD Player",
+							Price: "40",
+							Rating: "4"
+						}, 1, true);
+						var template = "<tr><td><span data-level='${dataLevel}'>${ID}</span></td><td>${Name}</td><td>${Price}</td><td>${Rating}</td></tr>",
+						resultHtml = $.ig.tmpl(template, ds.flatDataView());
+						$("#table").html(resultHtml);
+
+					} else {
+						alert(error);
+					}
+				}
+
+				$(window).load(function () {
+					ds = new $.%%WidgetName%%({
+						callback: render,
+						dataSource: products,
+						treeDS: {
+							childDataKey: "Products",
+							initialExpandDepth: 10,
+							propertyDataLevel: "dataLevel"
+						}
+					});
+					ds.dataBind();
+
+				});
+			```
 			paramType="object" the record key - primaryKey (string) or index (number)
 			paramType="object" the new record data.
 			paramType="number" row index at which to be insert the new row

@@ -10,18 +10,20 @@
  * jquery.ui.core.js
  * jquery.ui.widget.js
  * infragistics.util.js
+ * infragistics.util.jquery.js
  * infragistics.ui.shared.js
 */
 
-/*global define, jQuery, Class */
+/*global Class */
 (function (factory) {
 	if (typeof define === "function" && define.amd) {
 
 		// AMD. Register as an anonymous module.
-		define( /*"igniteui/js/modules/infragistics.ui.zoombar",*/ [
+		define( [
 			"jquery",
 			"jquery-ui",
 			"./infragistics.util",
+			"./infragistics.util.jquery",
 			"./infragistics.ui.shared",
 			"./infragistics.ui.zoombar-en"
 		], factory );
@@ -1053,6 +1055,12 @@
 		/* private functions */
 		_zoom: function (nLeft, nWidth, isInternal, refresh, animate) {
 			var a, noCancel;
+			/* issue #454 - don't proceed if the new zoom params are the same
+			as igDataChart doesn't accept same zoom params but processing its
+			events will still be blocked for the next change */
+			if (nLeft === this._cw.left && nWidth === this._cw.width) {
+				return;
+			}
 			animate = animate && this.options.windowPanDuration > 0;
 			a = {
 				previousZoom: this._defStore || {

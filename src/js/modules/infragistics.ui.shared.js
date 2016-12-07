@@ -10,17 +10,18 @@
  *	jquery.ui.core.js
  *	jquery.ui.widget.js
  *	infragistics.util.js
+ *  infragistics.util.jquery.js
  */
 
-/*global window, jQuery, define */
 (function (factory) {
 	if (typeof define === "function" && define.amd) {
 
 		// AMD. Register as an anonymous module.
-		define( /*"igniteui/js/modules/infragistics.ui.shared",*/ [
+		define( [
 			"jquery",
             "jquery-ui",
-			"./infragistics.util"
+			"./infragistics.util",
+			"./infragistics.util.jquery"
 		], factory );
 	} else {
 

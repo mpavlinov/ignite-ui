@@ -6,7 +6,6 @@
 *
 */
 
-/*global jQuery*/
 if (typeof jQuery !== "function") {
 	throw new Error("jQuery is undefined");
 }
@@ -44,7 +43,9 @@ $.ig.dependencies = [
 	{
 		widget: "igUtil",
 		priority: true,
-		scripts: [ "$path$/modules/infragistics.util.js" ],
+		scripts: [ "$path$/modules/infragistics.util.js",
+		"$path$/modules/infragistics.util.jquery.js",
+		"$path$/modules/infragistics.util.jquerydeferred.js" ],
 		locale: [ "$localePath$/infragistics.util-$locale$.js" ],
 		group: $.ig.loaderClass.locale.miscGroup,
 		css: [  ]
@@ -441,7 +442,7 @@ $.ig.dependencies = [
 		dependency: [ { name: "_ig_dv_geometry" } ],
 		scripts: [
 			"$path$/modules/infragistics.ui.bulletgraph.js",
-			"$path$/modules/infragistics.gauge_bulletgraph.js"
+			"$path$/modules/infragistics.bulletgraph.js"
 			],
 		group: $.ig.loaderClass.locale.dvGroup,
 		css: [ "$path$/structure/modules/infragistics.ui.bulletgraph.css" ]
@@ -468,7 +469,7 @@ $.ig.dependencies = [
 		widget: "igRadialMenu",
 		dependency: [
 			{ name: "igUtil" },
-			{ name: "_ig_dv_simple_core" }
+			{ name: "_ig_dv_core" }
 			],
 		scripts: [
 			"$path$/modules/infragistics.radialmenu_core.js",
